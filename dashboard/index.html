@@ -3,12 +3,93 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<title>Token Launch Radar</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+<a class="skip" href="#board">Skip to the ranked board</a>
+<div class="app">
+  <header class="hero">
+    <div class="hero-top">
+      <div class="brand"><span class="pulse" aria-hidden="true"></span><span class="brand-name">TOKEN LAUNCH RADAR</span></div>
+      <div class="hero-meta" id="heroMeta"></div>
+    </div>
+    <h1 class="title">Token Launch Radar</h1>
+    <p class="lede">Pre-token protocols ranked by an implied launch value. Every number is derived from the snapshot, not from a live feed.</p>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <section class="toolbar" aria-label="Board filters">
+    <div class="field grow">
+      <label for="q">Search</label>
+      <input id="q" type="search" placeholder="Name, slug, category or chain" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="category">Category</label>
+      <select id="category"></select>
+    </div>
+    <div class="field">
+      <label for="chain">Chain</label>
+      <select id="chain"></select>
+    </div>
+    <div class="field check">
+      <input id="watchOnly" type="checkbox">
+      <label for="watchOnly">Watchlist only</label>
+    </div>
+    <div class="field range-field">
+      <label for="minTvl">Min TVL</label>
+      <input id="minTvl" type="range" min="0" max="0" step="1" value="0">
+      <output id="minTvlOut" class="range-out">$0</output>
+    </div>
+    <button class="btn ghost" id="reset" type="button">Reset filters</button>
+    <span class="count" id="count"></span>
+  </section>
+
+  <section class="strip" aria-labelledby="hot-title">
+    <div class="strip-head">
+      <h2 id="hot-title">Hot movers</h2>
+      <span class="sub">Top seven-day growth in the snapshot</span>
+    </div>
+    <div class="cards" id="hotCards"></div>
+  </section>
+
+  <section class="strip" aria-labelledby="fresh-title">
+    <div class="strip-head">
+      <h2 id="fresh-title">Fresh and big</h2>
+      <span class="sub">Youngest protocols above the watchlist floor</span>
+    </div>
+    <div class="cards" id="freshCards"></div>
+  </section>
+
+  <section class="board-section" id="board" tabindex="-1" aria-labelledby="board-title">
+    <div class="board-head">
+      <h2 id="board-title">Ranked board</h2>
+      <p class="sub" id="boardMeta"></p>
+    </div>
+    <div class="table-wrap">
+      <table id="boardTable">
+        <caption class="sr-only">Pre-token protocols sorted by implied launch value; select a row for its model breakdown and farm plan.</caption>
+        <thead><tr id="headRow"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" hidden>
+      <h2>No protocol matches these filters</h2>
+      <p class="sub">Clear the search, loosen the TVL floor, or pick another category or chain.</p>
+      <button class="btn primary" id="emptyReset" type="button">Reset filters</button>
+    </div>
+  </section>
+</div>
+
+<div class="backdrop" id="backdrop" hidden></div>
+<aside class="drawer" id="drawer" aria-labelledby="drawer-title" aria-hidden="true" hidden>
+  <div class="drawer-top">
+    <div class="drawer-meta" id="drawerMeta"></div>
+    <button class="btn ghost drawer-close" id="drawerClose" type="button">Close</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>

@@ -289,11 +289,16 @@ function scoreProtocol(p: SnapshotProtocol, snapshot: Snapshot, model: ModelCons
   const clamp = (raw: number): number => Math.min(model.clamp_max_usd, Math.max(lower, Math.round(raw)));
   const factor = weight * mom * ageMult;
   const implied = clamp(p.tvl_usd * ps.p50 * factor);
+  const degenerate = ps.p25 === ps.p75;
+  const lowMultiple = degenerate && global.p50 > 0 ? ps.p50 * (global.p25 / global.p50) : ps.p25;
+  const highMultiple = degenerate && global.p50 > 0 ? ps.p50 * (global.p75 / global.p50) : ps.p75;
+  const lowRaw = clamp(p.tvl_usd * lowMultiple * factor);
+  const highRaw = clamp(p.tvl_usd * highMultiple * factor);
   return {
     implied,
-    low: clamp(p.tvl_usd * ps.p25 * factor),
+    low: lowRaw < implied ? lowRaw : implied - 1,
     mid: implied,
-    high: clamp(p.tvl_usd * ps.p75 * factor),
+    high: highRaw > implied ? highRaw : implied + 1,
     percentiles: ps,
     weight,
     momentumValue: mom,
