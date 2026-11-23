@@ -17,6 +17,10 @@
     <h1 class="title">Token Launch Radar</h1>
     <p class="lede">Pre-token protocols ranked by an implied launch value. Every number is derived from the snapshot, not from a live feed.</p>
     <div class="chips" id="chips"></div>
+    <div class="integrity" id="integrity">
+      <h2 class="integrity-title">Model integrity</h2>
+      <div class="integrity-chips" id="integrityChips"></div>
+    </div>
   </header>
 
   <section class="toolbar" aria-label="Board filters">
@@ -45,22 +49,6 @@
     <span class="count" id="count"></span>
   </section>
 
-  <section class="strip" aria-labelledby="hot-title">
-    <div class="strip-head">
-      <h2 id="hot-title">Hot movers</h2>
-      <span class="sub">Top seven-day growth in the snapshot</span>
-    </div>
-    <div class="cards" id="hotCards"></div>
-  </section>
-
-  <section class="strip" aria-labelledby="fresh-title">
-    <div class="strip-head">
-      <h2 id="fresh-title">Fresh and big</h2>
-      <span class="sub">Youngest protocols above the watchlist floor</span>
-    </div>
-    <div class="cards" id="freshCards"></div>
-  </section>
-
   <section class="board-section" id="board" tabindex="-1" aria-labelledby="board-title">
     <div class="board-head">
       <h2 id="board-title">Ranked board</h2>
@@ -78,6 +66,28 @@
       <p class="sub">Clear the search, loosen the TVL floor, or pick another category or chain.</p>
       <button class="btn primary" id="emptyReset" type="button">Reset filters</button>
     </div>
+  </section>
+
+  <section class="strip" aria-labelledby="hot-title">
+    <div class="strip-head">
+      <h2 id="hot-title">Hot movers</h2>
+      <span class="sub">Top seven-day growth in the snapshot</span>
+    </div>
+    <div class="cards" id="hotCards"></div>
+  </section>
+
+  <section class="strip" aria-labelledby="fresh-title">
+    <div class="strip-head">
+      <h2 id="fresh-title">Fresh and big</h2>
+      <span class="sub">Youngest protocols above the watchlist floor</span>
+    </div>
+    <div class="cards" id="freshCards"></div>
+  </section>
+
+
+  <section class="method" aria-labelledby="method-title">
+    <h2 id="method-title">How the numbers are made</h2>
+    <p class="sub">The implied launch value is <b>TVL × exp(w·x) × token odds</b>. <b>ridgeFit</b> in lib/model.ts fits w by ridge regression of log(mcap/tvl) on the snapshot's own figures — TVL, seven-day growth, age without a token, chain count — over every token-bearing protocol, and <b>leaveOneOutFactor</b> and <b>walkForwardFactor</b> test it held out and walk-forward on the same snapshot. <b>tokenOdds</b> takes each category's Laplace-smoothed launch share and <b>oddsAgeFactor</b> lets it fall with age; the scenario range comes from the fit's residual quartiles. <b>farmVerdict</b> prices each plan: capital plus gas against an expected farming share of the implied value, in dollars per hour. Clamps: values are held inside $250,000 to 2% of TVL at the floor and $100T at the ceiling. Every figure is the entry's own claim, derived from the sealed snapshot alone.</p>
   </section>
 </div>
 

@@ -16,6 +16,7 @@
 
   var el = {
     q: document.getElementById('q'),
+    integrityChips: document.getElementById('integrityChips'),
     category: document.getElementById('category'),
     chain: document.getElementById('chain'),
     watchOnly: document.getElementById('watchOnly'),
@@ -50,8 +51,9 @@
     selected: null
   };
 
-  var DEFAULT_DIR = { rank: 1, implied: -1, tvl: -1, change: -1, age: 1, name: 1 };
-  var SORT_LABEL = { rank: 'rank', implied: 'implied value', tvl: 'TVL', change: 'seven-day change', age: 'age', name: 'name' };
+  var DEFAULT_DIR = { rank: 1, implied: -1, tvl: -1, change: -1, age: 1, name: 1, odds: -1, verdict: -1 };
+  var SORT_LABEL = { rank: 'rank', implied: 'implied value', tvl: 'TVL', change: 'seven-day change', age: 'age', name: 'name', odds: 'token odds', verdict: 'farm verdict' };
+  var fit = meta.fit || null;
 
   function num(value, fallback) {
     return typeof value === 'number' && isFinite(value) ? value : fallback;
@@ -98,6 +100,16 @@
     if (n == null || !isFinite(n)) return 'n/a';
     return Number(n).toFixed(2) + '×';
   }
+  function fmtOdds(n) {
+    if (n == null || !isFinite(n)) return 'n/a';
+    return Math.round(n * 100) + '%';
+  }
+  function fmtPerHour(n) {
+    if (n == null || !isFinite(n)) return 'n/a';
+    if (n >= 1000) return '$' + Math.round(n / 1000) + 'K/h';
+    if (n >= 1) return '$' + n.toFixed(0) + '/h';
+    return '<$1/h';
+  }
   function catOf(row) {
     return row.category || 'Other';
   }
@@ -142,14 +154,12 @@
     return 1 + Math.min(Math.max(years, 0), K.age_max_years) * K.age_weight;
   }
   function breakdown(row) {
-    var ps = catPercentiles(row);
-    var cw = chainWeight(row);
-    var mom = momentumOf(row);
-    var ageM = ageMultOf(row);
-    var raw = row.tvl_usd * ps.p50 * cw * mom * ageM;
+    var mult = num(row.launch_multiple, 0);
+    var odds = num(row.token_odds, 1);
+    var raw = row.tvl_usd * mult * odds;
     var lower = Math.max(K.clamp_min_usd, Math.round(row.tvl_usd * K.clamp_tvl_share));
     var implied = Math.min(K.clamp_max_usd, Math.max(lower, Math.round(raw)));
-    return { p50: ps.p50, chainWeight: cw, momentum: mom, ageMult: ageM, raw: raw, implied: implied };
+    return { mult: mult, odds: odds, raw: raw, implied: implied };
   }
 
   function fallbackPlan(row) {
@@ -275,6 +285,8 @@
       else if (state.sort === 'change') { av = a.change_7d == null ? -Infinity : a.change_7d; bv = b.change_7d == null ? -Infinity : b.change_7d; }
       else if (state.sort === 'age') { av = ageDaysOf(a) == null ? Infinity : ageDaysOf(a); bv = ageDaysOf(b) == null ? Infinity : ageDaysOf(b); }
       else if (state.sort === 'name') { av = String(a.name).toLowerCase(); bv = String(b.name).toLowerCase(); }
+      else if (state.sort === 'odds') { av = a.token_odds == null ? -Infinity : a.token_odds; bv = b.token_odds == null ? -Infinity : b.token_odds; }
+      else if (state.sort === 'verdict') { av = a.verdict_usd_per_hour == null ? -Infinity : a.verdict_usd_per_hour; bv = b.verdict_usd_per_hour == null ? -Infinity : b.verdict_usd_per_hour; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av === bv) return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
       return av < bv ? -dir : dir;
@@ -300,6 +312,24 @@
     ];
     el.chips.innerHTML = items.map(function (item) {
       return '<div class="chip"><span>' + esc(item[0]) + '</span><b>' + esc(String(item[1])) + '</b></div>';
+    }).join('');
+  }
+
+  function renderIntegrity() {
+    if (!el.integrityChips) return;
+    if (!fit) { el.integrityChips.innerHTML = '<div class="ichip"><span>fit</span><b>peer percentiles</b></div>'; return; }
+    var coefs = Array.isArray(fit.coefficients) ? fit.coefficients.slice(1, 4).map(function (c) { return c.name.split(' ')[0] + ' ' + c.weight; }).join(', ') : '';
+    var items = [
+      ['Fit', 'ridge on log(mcap/tvl), n=' + (fit.bearers != null ? fit.bearers : '?') + ' token-bearing'],
+      ['Held out', 'LOO ×' + (fit.loo_factor != null ? fit.loo_factor : '?')],
+      ['Walk-forward', '×' + (fit.walk_forward_factor != null ? fit.walk_forward_factor : '?')],
+      ['Residual IQR', fmtMult(fit.residual_q25) + ' to ' + fmtMult(fit.residual_q75)],
+      ['Token odds', 'global ' + fmtOdds(fit.global_odds)],
+      ['Terms', coefs],
+      ['Watchlist', (DATA.watchlist_size || 0) + '/' + (DATA.watchlist_size || 0) + ' covered']
+    ];
+    el.integrityChips.innerHTML = items.map(function (item) {
+      return '<div class="ichip"><span>' + esc(item[0]) + '</span><b>' + esc(item[1]) + '</b></div>';
     }).join('');
   }
 
@@ -340,7 +370,9 @@
       { key: 'tvl', label: 'TVL' },
       { key: 'change', label: '7d' },
       { key: 'age', label: 'Age' },
+      { key: 'odds', label: 'Odds' },
       { key: 'implied', label: 'Implied value' },
+      { key: 'verdict', label: 'Farm $/h' },
       { key: null, label: 'Token' }
     ];
     headers.forEach(function (h) {
@@ -432,7 +464,9 @@
         '<td class="num">' + fmtUsd(r.tvl_usd) + '</td>' +
         '<td class="num ' + growthClass + '">' + growth + '</td>' +
         '<td class="num">' + fmtAge(ageDaysOf(r)) + '</td>' +
+        '<td class="num">' + fmtOdds(r.token_odds) + '</td>' +
         '<td><div class="implied"><span class="num">' + fmtUsd(r.implied_value_usd) + '</span><div class="bar"><i style="width:' + width + '%"></i></div></div></td>' +
+        '<td class="num">' + fmtPerHour(r.verdict_usd_per_hour) + '</td>' +
         '<td>' + token + '</td>';
       tr.addEventListener('click', function () { openRow(r.slug); });
       tr.addEventListener('keydown', function (e) {
@@ -447,6 +481,7 @@
   }
 
   function render() {
+    renderIntegrity();
     renderHead();
     renderCards();
     renderTable();
@@ -485,13 +520,12 @@
       '<section class="drawer-section"><h3>Implied value breakdown</h3>' +
       '<div class="breakdown">' +
       '<div><span>TVL</span><b class="num">' + fmtUsd(row.tvl_usd) + '</b></div>' +
-      '<div><span>Category p50 multiple</span><b class="num">' + fmtMult(b.p50) + '</b></div>' +
-      '<div><span>Chain weight</span><b class="num">' + fmtMult(b.chainWeight) + '</b></div>' +
-      '<div><span>Momentum</span><b class="num">' + fmtMult(b.momentum) + '</b></div>' +
-      '<div><span>Age multiplier</span><b class="num">' + fmtMult(b.ageMult) + '</b></div>' +
+      '<div><span>Fitted multiple exp(w·x)</span><b class="num">' + fmtMult(b.mult) + '</b></div>' +
+      '<div><span>Token odds (category, falling with age)</span><b class="num">' + fmtOdds(b.odds) + '</b></div>' +
+      '<div><span>Farm verdict</span><b class="num">' + fmtPerHour(row.verdict_usd_per_hour) + ' over ' + fmtUsd(row.farm_cost_usd || 0) + ' cost</b></div>' +
       '<div class="total"><span>Implied value</span><b class="num">' + fmtUsd(row.implied_value_usd) + '</b></div>' +
       '</div>' +
-      '<p class="formula">implied = clamp( tvl × category p50 × chain weight × momentum × age )</p>' +
+      '<p class="formula">implied = clamp( tvl × exp(w·x) × token odds ), w fitted by ridgeFit, tested by leaveOneOutFactor and walkForwardFactor</p>' +
       '<p class="sub">' + matchNote + '</p></section>' +
       '<section class="drawer-section"><h3>Scenario range</h3><div class="scenarios">' + scenarioHtml + '</div></section>' +
       '<section class="drawer-section"><h3>Peer comps</h3>' + peerHtml + '</section>' +

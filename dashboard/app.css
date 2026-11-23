@@ -228,3 +228,58 @@ body.drawer-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Model integrity strip */
+.integrity {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(120, 160, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(20, 30, 60, 0.45);
+}
+.integrity-title {
+  margin: 0 0 10px;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8fa8d8;
+}
+.integrity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ichip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: rgba(40, 55, 100, 0.5);
+  border: 1px solid rgba(120, 160, 255, 0.14);
+}
+.ichip span {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7d92c0;
+}
+.ichip b { font-size: 12px; color: #e8eefc; font-variant-numeric: tabular-nums; }
+
+/* Methodology */
+.method {
+  margin: 26px 0 34px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 160, 255, 0.14);
+  background: rgba(16, 24, 48, 0.5);
+}
+.method h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8fa8d8;
+}
+.method p { color: #a9b8dc; line-height: 1.6; font-size: 13px; margin: 0; }
+.method b { color: #dfe8ff; }

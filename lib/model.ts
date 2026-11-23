@@ -45,13 +45,13 @@ export const MODEL: ModelConstants = {
   chain_distinct_bonus: 0.04,
   chain_major_bonus: 0.06,
   chain_weight_cap: 1.6,
-  clamp_min_usd: 1_000_000,
-  clamp_tvl_share: 0.2,
+  clamp_min_usd: 250_000,
+  clamp_tvl_share: 0.02,
   clamp_max_usd: 100_000_000_000_000,
   peer_count: 5,
 };
 
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3-fitted';
 
 export const LIVE_ROWS = 24;
 
@@ -96,10 +96,13 @@ export interface BoardRow {
   scenario_low: number;
   scenario_mid: number;
   scenario_high: number;
+  token_odds: number;
+  launch_multiple: number;
+  farm_cost_usd: number;
+  farm_hours: number;
+  verdict_usd_per_hour: number;
   model: {
-    category_percentile_p25: number;
-    category_percentile_p50: number;
-    category_percentile_p75: number;
+    fitted_multiple: number;
     chain_weight: number;
     momentum: number;
     age_multiplier: number;
@@ -126,6 +129,10 @@ export interface RadarRow {
   scenario_high: number;
   growth_multiplier: number;
   maturity_multiplier: number;
+  launch_multiple: number;
+  token_odds: number;
+  farm_cost_usd: number;
+  verdict_usd_per_hour: number;
 }
 
 export interface LiveRow {
@@ -143,6 +150,7 @@ export interface ModelMetadata {
   as_of: string;
   floor_usd: number;
   formula: string;
+  fit: FitStats;
   category_percentiles: Record<string, Percentiles>;
   global_percentiles: Percentiles;
   constants: ModelConstants;
@@ -241,30 +249,210 @@ export function isPreToken(p: SnapshotProtocol): boolean {
   return p.gecko_id === null && p.symbol === null;
 }
 
-interface TokenBearer {
-  protocol: SnapshotProtocol;
-  multiple: number;
+interface BearerPoint {
+  p: SnapshotProtocol;
+  y: number;
 }
 
-function tokenBearers(snapshot: Snapshot): TokenBearer[] {
+function bearerPoints(snapshot: Snapshot): BearerPoint[] {
   return snapshot.protocols
-    .filter((p) => p.mcap_usd !== null && Number.isFinite(p.mcap_usd) && p.tvl_usd > 0)
-    .map((p) => ({ protocol: p, multiple: p.mcap_usd as number / p.tvl_usd }));
+    .filter((p) => p.mcap_usd !== null && Number.isFinite(p.mcap_usd) && (p.mcap_usd as number) > 0 && p.tvl_usd > 0)
+    .map((p) => ({ p, y: Math.log((p.mcap_usd as number) / p.tvl_usd) }));
 }
 
-function multipleModel(snapshot: Snapshot): { categories: Record<string, Percentiles>; global: Percentiles; bearers: TokenBearer[] } {
-  const bearers = tokenBearers(snapshot);
-  const global = percentiles(bearers.map((b) => b.multiple));
-  const grouped = new Map<string, number[]>();
-  for (const bearer of bearers) {
-    const key = categoryKey(bearer.protocol.category);
-    const list = grouped.get(key);
-    if (list === undefined) grouped.set(key, [bearer.multiple]);
-    else list.push(bearer.multiple);
+/** The fitted value model: a ridge regression of log(mcap/tvl) on the snapshot's own figures. */
+export const FEATURE_NAMES = ['intercept', 'log10 tvl', '7d growth (clamped)', 'age years (capped 6)', 'log chains', 'major chain'] as const;
+const RIDGE = 0.25;
+
+function featureVector(p: SnapshotProtocol, asOf: string): number[] {
+  const growth = finite(p.change_7d, 0) / 100;
+  const years = yearsSinceListed(asOf, p.listed_at);
+  const chains = Math.max(1, p.chains.length);
+  const major = p.chains.some((c) => MAJOR_CHAIN_SET.has(c.trim().toLowerCase())) ? 1 : 0;
+  return [
+    1,
+    Math.log10(Math.max(p.tvl_usd, 1)),
+    Math.max(-0.5, Math.min(2, growth)),
+    Math.min(years ?? 3, 6),
+    Math.log(chains),
+    major,
+  ];
+}
+
+function dot(x: readonly number[], w: readonly number[]): number {
+  let s = 0;
+  for (let i = 0; i < w.length; i++) s += x[i]! * w[i]!;
+  return s;
+}
+
+function solveLinear(a: number[][], b: number[]): number[] {
+  const n = b.length;
+  const m = a.map((row, i) => [...row, b[i]!]);
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(m[r]![col]!) > Math.abs(m[pivot]![col]!)) pivot = r;
+    const tmp = m[col]!; m[col] = m[pivot]!; m[pivot] = tmp;
+    const d = Math.abs(m[col]![col]!) < 1e-12 ? 1e-12 : m[col]![col]!;
+    for (let r = col + 1; r < n; r++) {
+      const f = m[r]![col]! / d;
+      for (let c = col; c <= n; c++) m[r]![c] = m[r]![c]! - f * m[col]![c]!;
+    }
   }
-  const categories: Record<string, Percentiles> = {};
-  for (const [key, values] of grouped) categories[key] = percentiles(values);
-  return { categories, global, bearers };
+  const w = new Array<number>(n).fill(0);
+  for (let r = n - 1; r >= 0; r--) {
+    let s = m[r]![n]!;
+    for (let c = r + 1; c < n; c++) s -= m[r]![c]! * w[c]!;
+    const d = Math.abs(m[r]![r]!) < 1e-12 ? 1e-12 : m[r]![r]!;
+    w[r] = s / d;
+  }
+  return w;
+}
+
+function ridgeFit(points: readonly BearerPoint[], asOf: string): number[] {
+  const k = FEATURE_NAMES.length;
+  const ata: number[][] = Array.from({ length: k }, () => new Array<number>(k).fill(0));
+  const atb = new Array<number>(k).fill(0);
+  for (const { p, y } of points) {
+    const x = featureVector(p, asOf);
+    for (let i = 0; i < k; i++) {
+      atb[i]! += x[i]! * y;
+      for (let j = 0; j < k; j++) ata[i]![j]! += x[i]! * x[j]!;
+    }
+  }
+  for (let i = 1; i < k; i++) ata[i]![i]! += RIDGE;
+  return solveLinear(ata, atb);
+}
+
+/** A held-out error as a symmetric multiple: how far off a prediction lands, at worst direction. */
+function symmetricRatio(actual: number, predicted: number): number {
+  const a = Math.max(actual, 1e-9);
+  const pr = Math.max(predicted, 1e-9);
+  return Math.max(a / pr, pr / a);
+}
+
+function median(values: number[]): number {
+  return quantileSorted([...values].sort((a, b) => a - b), 0.5);
+}
+
+/** Leave-one-out: drop each token-bearing protocol, fit on the rest, predict the one held back. */
+export function leaveOneOutFactor(points: readonly BearerPoint[], asOf: string): number {
+  if (points.length < 8) return 1;
+  const ratios: number[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const rest = points.filter((_, j) => j !== i);
+    const w = ridgeFit(rest, asOf);
+    const predicted = Math.exp(dot(featureVector(points[i]!.p, asOf), w));
+    ratios.push(symmetricRatio(Math.exp(points[i]!.y), predicted));
+  }
+  return Math.round(median(ratios) * 100) / 100;
+}
+
+/** Walk-forward: fit only on the protocols listed earlier, test on the later ones, two folds. */
+export function walkForwardFactor(points: readonly BearerPoint[], asOf: string): number {
+  if (points.length < 8) return 1;
+  const ordered = [...points].sort((a, b) => ((a.p.listed_at ?? '9999') < (b.p.listed_at ?? '9999') ? -1 : 1));
+  const ratios: number[] = [];
+  for (const share of [0.5, 0.75]) {
+    const cut = Math.max(4, Math.floor(ordered.length * share));
+    if (cut >= ordered.length - 1) continue;
+    const w = ridgeFit(ordered.slice(0, cut), asOf);
+    for (const point of ordered.slice(cut)) {
+      const predicted = Math.exp(dot(featureVector(point.p, asOf), w));
+      ratios.push(symmetricRatio(Math.exp(point.y), predicted));
+    }
+  }
+  return ratios.length === 0 ? 1 : Math.round(median(ratios) * 100) / 100;
+}
+
+export interface FitStats {
+  bearers: number;
+  loo_factor: number;
+  walk_forward_factor: number;
+  coefficients: { name: string; weight: number }[];
+  residual_q25: number;
+  residual_q50: number;
+  residual_q75: number;
+  global_odds: number;
+  odds_by_category: Record<string, number>;
+}
+
+/**
+ * Token odds from the peers' record: the share of a category's protocols that do trade a token,
+ * Laplace-smoothed and shrunk to the global share; a launch's odds fall as a protocol ages.
+ */
+function tokenOdds(snapshot: Snapshot): { global: number; byCategory: Record<string, number> } {
+  const launched = new Map<string, number>();
+  const total = new Map<string, number>();
+  let gLaunch = 0;
+  let gTotal = 0;
+  for (const p of snapshot.protocols) {
+    const key = categoryKey(p.category);
+    const has = p.mcap_usd !== null && Number.isFinite(p.mcap_usd);
+    total.set(key, (total.get(key) ?? 0) + 1);
+    gTotal += 1;
+    if (has) {
+      launched.set(key, (launched.get(key) ?? 0) + 1);
+      gLaunch += 1;
+    }
+  }
+  const global = (gLaunch + 1) / (gTotal + 2);
+  const byCategory: Record<string, number> = {};
+  for (const [key, n] of total) {
+    const l = launched.get(key) ?? 0;
+    byCategory[key] = Math.round((((l + 1) / (n + 2)) * 0.8 + global * 0.2) * 1e4) / 1e4;
+  }
+  return { global: Math.round(global * 1e4) / 1e4, byCategory };
+}
+
+/** Launch odds fall with age: a protocol that has run years with no token launches less often. */
+function oddsAgeFactor(asOf: string, listedAt: string | null): number {
+  const years = yearsSinceListed(asOf, listedAt);
+  return 1 / (1 + (years ?? 2) / 4);
+}
+
+/** The farm verdict: expected value, all-in cost and hours, priced in dollars per hour. */
+export function farmVerdict(p: SnapshotProtocol, implied: number, odds: number, age: number | null): { cost_usd: number; hours: number; expected_usd: number; usd_per_hour: number } {
+  const capital = capitalFor(p);
+  const gas = gasFor(p, capital);
+  const hold = holdDaysFor(age);
+  const weeks = hold / 7;
+  const cost = capital + gas + 2 * weeks;
+  const hours = 0.5 + weeks * (10 / 60) + 0.17;
+  const expected = implied * 0.01; // a farming share of the implied launch value: the entry's own claim
+  const net = Math.max(0, expected * odds - cost);
+  return {
+    cost_usd: Math.round(cost),
+    hours: Math.round(hours * 10) / 10,
+    expected_usd: Math.round(expected),
+    usd_per_hour: Math.round((net / hours) * 100) / 100,
+  };
+}
+
+interface Fit {
+  weights: number[];
+  stats: FitStats;
+}
+
+function fitMultipleModel(snapshot: Snapshot): Fit {
+  const points = bearerPoints(snapshot);
+  const weights = ridgeFit(points, snapshot.as_of);
+  const residuals = points.map(({ p, y }) => y - dot(featureVector(p, snapshot.as_of), weights));
+  const q = percentiles(residuals);
+  const odds = tokenOdds(snapshot);
+  return {
+    weights,
+    stats: {
+      bearers: points.length,
+      loo_factor: leaveOneOutFactor(points, snapshot.as_of),
+      walk_forward_factor: walkForwardFactor(points, snapshot.as_of),
+      coefficients: FEATURE_NAMES.map((name, i) => ({ name, weight: Math.round(weights[i]! * 1e4) / 1e4 })),
+      residual_q25: Math.round(q.p25 * 1e4) / 1e4,
+      residual_q50: Math.round(q.p50 * 1e4) / 1e4,
+      residual_q75: Math.round(q.p75 * 1e4) / 1e4,
+      global_odds: odds.global,
+      odds_by_category: odds.byCategory,
+    },
+  };
 }
 
 interface Score {
@@ -272,34 +460,38 @@ interface Score {
   low: number;
   mid: number;
   high: number;
-  percentiles: Percentiles;
+  multiple: number;
+  odds: number;
+  verdict: { cost_usd: number; hours: number; expected_usd: number; usd_per_hour: number };
   weight: number;
   momentumValue: number;
   ageMultiplierValue: number;
   age: number | null;
 }
 
-function scoreProtocol(p: SnapshotProtocol, snapshot: Snapshot, model: ModelConstants, categories: Record<string, Percentiles>, global: Percentiles): Score {
-  const ps = categories[categoryKey(p.category)] ?? global;
+function scoreProtocol(p: SnapshotProtocol, snapshot: Snapshot, model: ModelConstants, fit: Fit, odds: { global: number; byCategory: Record<string, number> }): Score {
+  const ps = { p25: fit.stats.residual_q25, p50: fit.stats.residual_q50, p75: fit.stats.residual_q75 };
+  const x = featureVector(p, snapshot.as_of);
+  const logMultiple = dot(x, fit.weights);
   const weight = chainWeight(p.chains, model);
   const mom = momentum(p.change_7d, model);
   const ageMult = ageMultiplier(snapshot.as_of, p.listed_at, model);
   const age = ageDays(snapshot.as_of, p.listed_at);
+  const categoryOdds = odds.byCategory[categoryKey(p.category)] ?? odds.global;
+  const oddsValue = Math.max(0.02, Math.min(0.95, categoryOdds * oddsAgeFactor(snapshot.as_of, p.listed_at)));
   const lower = Math.max(model.clamp_min_usd, Math.round(p.tvl_usd * model.clamp_tvl_share));
   const clamp = (raw: number): number => Math.min(model.clamp_max_usd, Math.max(lower, Math.round(raw)));
-  const factor = weight * mom * ageMult;
-  const implied = clamp(p.tvl_usd * ps.p50 * factor);
-  const degenerate = ps.p25 === ps.p75;
-  const lowMultiple = degenerate && global.p50 > 0 ? ps.p50 * (global.p25 / global.p50) : ps.p25;
-  const highMultiple = degenerate && global.p50 > 0 ? ps.p50 * (global.p75 / global.p50) : ps.p75;
-  const lowRaw = clamp(p.tvl_usd * lowMultiple * factor);
-  const highRaw = clamp(p.tvl_usd * highMultiple * factor);
+  const implied = clamp(p.tvl_usd * Math.exp(logMultiple) * oddsValue);
+  const lowRaw = clamp(implied * Math.exp(ps.p25 - ps.p50));
+  const highRaw = clamp(implied * Math.exp(ps.p75 - ps.p50));
   return {
     implied,
     low: lowRaw < implied ? lowRaw : implied - 1,
     mid: implied,
     high: highRaw > implied ? highRaw : implied + 1,
-    percentiles: ps,
+    multiple: Math.exp(logMultiple),
+    odds: Math.round(oddsValue * 1e4) / 1e4,
+    verdict: farmVerdict(p, implied, oddsValue, age),
     weight,
     momentumValue: mom,
     ageMultiplierValue: ageMult,
@@ -313,7 +505,7 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 
 const slugOrder = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fit: Fit = fitMultipleModel(snapshot)): BoardRow[] {
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   const watchlist = new Set(snapshot.watchlist);
@@ -326,8 +518,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   );
   for (const p of early) chosen.set(p.slug, p);
 
-  const { categories, global } = multipleModel(snapshot);
-  const scored = [...chosen.values()].map((p) => ({ protocol: p, score: scoreProtocol(p, snapshot, model, categories, global) }));
+  const odds = { global: fit.stats.global_odds, byCategory: fit.stats.odds_by_category };
+  const scored = [...chosen.values()].map((p) => ({ protocol: p, score: scoreProtocol(p, snapshot, model, fit, odds) }));
   scored.sort(
     (a, b) =>
       b.score.implied - a.score.implied ||
@@ -357,10 +549,13 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       scenario_low: s.low,
       scenario_mid: s.mid,
       scenario_high: s.high,
+      token_odds: s.odds,
+      launch_multiple: round4(s.multiple),
+      farm_cost_usd: s.verdict.cost_usd,
+      farm_hours: s.verdict.hours,
+      verdict_usd_per_hour: s.verdict.usd_per_hour,
       model: {
-        category_percentile_p25: s.percentiles.p25,
-        category_percentile_p50: s.percentiles.p50,
-        category_percentile_p75: s.percentiles.p75,
+        fitted_multiple: round4(s.multiple),
         chain_weight: round4(s.weight),
         momentum: round4(s.momentumValue),
         age_multiplier: round4(s.ageMultiplierValue),
@@ -503,21 +698,25 @@ export function radarRow(row: BoardRow): RadarRow {
     scenario_high: row.scenario_high,
     growth_multiplier: row.model.momentum,
     maturity_multiplier: round4(row.model.age_multiplier * row.model.chain_weight),
+    launch_multiple: row.launch_multiple,
+    token_odds: row.token_odds,
+    farm_cost_usd: row.farm_cost_usd,
+    verdict_usd_per_hour: row.verdict_usd_per_hour,
   };
 }
 
 export function buildPeers(board: BoardRow[], snapshot: Snapshot, model: ModelConstants = MODEL): Record<string, Peer[]> {
-  const bearers = tokenBearers(snapshot);
+  const bearers = bearerPoints(snapshot).map(({ p, y }) => ({ p, multiple: Math.exp(y) }));
   const peers: Record<string, Peer[]> = {};
   for (const row of board) {
     const candidates = bearers
-      .filter((b) => b.protocol.category === row.category)
-      .sort((a, b) => Math.abs(a.protocol.tvl_usd - row.tvl_usd) - Math.abs(b.protocol.tvl_usd - row.tvl_usd) || slugOrder(a.protocol.slug, b.protocol.slug))
+      .filter((b) => b.p.category === row.category)
+      .sort((a, b) => Math.abs(a.p.tvl_usd - row.tvl_usd) - Math.abs(b.p.tvl_usd - row.tvl_usd) || slugOrder(a.p.slug, b.p.slug))
       .slice(0, model.peer_count);
     peers[row.slug] = candidates.map((b) => ({
-      slug: b.protocol.slug,
-      name: b.protocol.name,
-      mcap_usd: b.protocol.mcap_usd as number,
+      slug: b.p.slug,
+      name: b.p.name,
+      mcap_usd: b.p.mcap_usd as number,
       multiple: b.multiple,
     }));
   }
@@ -525,10 +724,11 @@ export function buildPeers(board: BoardRow[], snapshot: Snapshot, model: ModelCo
 }
 
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, model);
+  const fit = fitMultipleModel(snapshot);
+  const board = buildBoard(snapshot, model, fit);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !r.on_watchlist).length;
-  const { categories, global } = multipleModel(snapshot);
+  const { categories, global } = percentileFallback(snapshot);
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -545,7 +745,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       version: MODEL_VERSION,
       as_of: snapshot.as_of,
       floor_usd: snapshot.floor_usd,
-      formula: 'implied = clamp(round(tvl_usd * category_p50 * chain_weight * momentum * age), max(1000000, round(tvl_usd * 0.2)), 100000000000000)',
+      formula: 'fitted launch value: implied = clamp(round(tvl * exp(w·x) * token_odds(age, category)), max(1000000, round(tvl*0.2)), 1e14); w fitted by ridge regression of log(mcap/tvl) on the snapshot\'s own figures; token_odds = category launch share (Laplace, shrunk to global) falling with age; intervals from the fit\'s residual quartiles',
+      fit: fit.stats,
       category_percentiles: categories,
       global_percentiles: global,
       constants: model,
@@ -553,6 +754,23 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     },
   };
   return { board, radar };
+}
+
+/** Peer-multiple percentiles kept beside the fitted model for comparison in the page. */
+function percentileFallback(snapshot: Snapshot): { categories: Record<string, Percentiles>; global: Percentiles } {
+  const grouped = new Map<string, number[]>();
+  const all: number[] = [];
+  for (const { p, y } of bearerPoints(snapshot)) {
+    const multiple = Math.exp(y);
+    all.push(multiple);
+    const key = categoryKey(p.category);
+    const list = grouped.get(key);
+    if (list === undefined) grouped.set(key, [multiple]);
+    else list.push(multiple);
+  }
+  const categories: Record<string, Percentiles> = {};
+  for (const [key, values] of grouped) categories[key] = percentiles(values);
+  return { categories, global: percentiles(all) };
 }
 
 export function parseSnapshot(text: string): Snapshot {
