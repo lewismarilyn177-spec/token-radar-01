@@ -11,7 +11,7 @@
   var asOf = DATA && DATA.as_of ? DATA.as_of : meta.as_of || 'unknown';
   var floorUsd = DATA && DATA.floor_usd != null ? DATA.floor_usd : meta.floor_usd != null ? meta.floor_usd : 0;
   var sourceText = DATA && DATA.source ? DATA.source : meta.source || 'snapshot';
-  var modelVersion = DATA && DATA.model_version ? DATA.model_version : meta.version || meta.model_version || 'radar';
+  var modelVersion = DATA && DATA.model_version ? DATA.model_version : meta.version || meta.model_version || 'radar-3-fitted';
   var DAY_MS = 86400000;
 
   var el = {
@@ -68,8 +68,8 @@
     chain_distinct_bonus: num(M.chain_distinct_bonus, 0.04),
     chain_major_bonus: num(M.chain_major_bonus, 0.06),
     chain_weight_cap: num(M.chain_weight_cap, 1.6),
-    clamp_min_usd: num(M.clamp_min_usd, 1000000),
-    clamp_tvl_share: num(M.clamp_tvl_share, 0.2),
+    clamp_min_usd: num(M.clamp_min_usd, 250000),
+    clamp_tvl_share: num(M.clamp_tvl_share, 0.02),
     clamp_max_usd: num(M.clamp_max_usd, 100000000000000)
   };
 
