@@ -19,7 +19,7 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-export interface ModelConstants {
+export interface ModelConfig {
   momentum_weight: number;
   momentum_floor: number;
   momentum_cap: number;
@@ -35,7 +35,7 @@ export interface ModelConstants {
   peer_count: number;
 }
 
-export const MODEL: ModelConstants = {
+export const MODEL: ModelConfig = {
   momentum_weight: 0.5,
   momentum_floor: -0.5,
   momentum_cap: 2,
@@ -52,9 +52,7 @@ export const MODEL: ModelConstants = {
 };
 
 export const MODEL_VERSION = 'radar-3-fitted';
-
 export const LIVE_ROWS = 24;
-
 export const MAJOR_CHAINS = ['Ethereum', 'Solana', 'Base', 'Arbitrum', 'BSC', 'Optimism', 'Polygon'];
 
 export interface Percentiles {
@@ -153,7 +151,7 @@ export interface ModelMetadata {
   fit: FitStats;
   category_percentiles: Record<string, Percentiles>;
   global_percentiles: Percentiles;
-  constants: ModelConstants;
+  constants: ModelConfig;
   major_chains: string[];
 }
 
@@ -180,9 +178,9 @@ export class SnapshotError extends Error {
 }
 
 const DAY_MS = 86_400_000;
-const MAJOR_CHAIN_SET = new Set(MAJOR_CHAINS.map((c) => c.toLowerCase()));
+const MAJOR_CHAIN_SET = new Set(MAJOR_CHAINS.map(c => c.toLowerCase()));
 
-function finite(value: unknown, fallback: number): number {
+function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
@@ -202,24 +200,24 @@ function yearsSinceListed(asOf: string, listedAt: string | null): number | null 
   return Math.max(0, (a - b) / (365 * DAY_MS));
 }
 
-export function momentum(change7d: number | null, model: ModelConstants = MODEL): number {
-  const growth = finite(change7d, 0) / 100;
-  const clamped = Math.max(model.momentum_floor, Math.min(model.momentum_cap, growth));
-  return 1 + clamped * model.momentum_weight;
+export function momentum(change7d: number | null, config: ModelConfig = MODEL): number {
+  const growth = finiteNumber(change7d, 0) / 100;
+  const clamped = Math.max(config.momentum_floor, Math.min(config.momentum_cap, growth));
+  return 1 + clamped * config.momentum_weight;
 }
 
-export function ageMultiplier(asOf: string, listedAt: string | null, model: ModelConstants = MODEL): number {
+export function ageMultiplier(asOf: string, listedAt: string | null, config: ModelConfig = MODEL): number {
   const years = yearsSinceListed(asOf, listedAt);
-  const yearsForModel = years ?? model.age_fallback_years;
-  return 1 + Math.min(Math.max(yearsForModel, 0), model.age_max_years) * model.age_weight;
+  const yearsForModel = years ?? config.age_fallback_years;
+  return 1 + Math.min(Math.max(yearsForModel, 0), config.age_max_years) * config.age_weight;
 }
 
-export function chainWeight(chains: string[], model: ModelConstants = MODEL): number {
-  const distinct = new Set(chains.map((c) => c.trim().toLowerCase())).size;
-  const major = new Set(chains.map((c) => c.trim().toLowerCase()).filter((c) => MAJOR_CHAIN_SET.has(c))).size;
-  const distinctBonus = model.chain_distinct_bonus * Math.max(0, Math.min(distinct, model.age_max_years) - 1);
-  const majorBonus = model.chain_major_bonus * Math.min(major, model.age_max_years);
-  return Math.min(model.chain_weight_cap, 1 + distinctBonus + majorBonus);
+export function chainWeight(chains: string[], config: ModelConfig = MODEL): number {
+  const distinct = new Set(chains.map(c => c.trim().toLowerCase())).size;
+  const major = new Set(chains.map(c => c.trim().toLowerCase()).filter(c => MAJOR_CHAIN_SET.has(c))).size;
+  const distinctBonus = config.chain_distinct_bonus * Math.max(0, Math.min(distinct, config.age_max_years) - 1);
+  const majorBonus = config.chain_major_bonus * Math.min(major, config.age_max_years);
+  return Math.min(config.chain_weight_cap, 1 + distinctBonus + majorBonus);
 }
 
 function quantileSorted(sorted: number[], q: number): number {
@@ -256,19 +254,18 @@ interface BearerPoint {
 
 function bearerPoints(snapshot: Snapshot): BearerPoint[] {
   return snapshot.protocols
-    .filter((p) => p.mcap_usd !== null && Number.isFinite(p.mcap_usd) && (p.mcap_usd as number) > 0 && p.tvl_usd > 0)
-    .map((p) => ({ p, y: Math.log((p.mcap_usd as number) / p.tvl_usd) }));
+    .filter(p => p.mcap_usd !== null && Number.isFinite(p.mcap_usd) && p.mcap_usd > 0 && p.tvl_usd > 0)
+    .map(p => ({ p, y: Math.log(p.mcap_usd / p.tvl_usd) }));
 }
 
-/** The fitted value model: a ridge regression of log(mcap/tvl) on the snapshot's own figures. */
 export const FEATURE_NAMES = ['intercept', 'log10 tvl', '7d growth (clamped)', 'age years (capped 6)', 'log chains', 'major chain'] as const;
 const RIDGE = 0.25;
 
 function featureVector(p: SnapshotProtocol, asOf: string): number[] {
-  const growth = finite(p.change_7d, 0) / 100;
+  const growth = finiteNumber(p.change_7d, 0) / 100;
   const years = yearsSinceListed(asOf, p.listed_at);
   const chains = Math.max(1, p.chains.length);
-  const major = p.chains.some((c) => MAJOR_CHAIN_SET.has(c.trim().toLowerCase())) ? 1 : 0;
+  const major = p.chains.some(c => MAJOR_CHAIN_SET.has(c.trim().toLowerCase())) ? 1 : 0;
   return [
     1,
     Math.log10(Math.max(p.tvl_usd, 1)),
@@ -291,7 +288,9 @@ function solveLinear(a: number[][], b: number[]): number[] {
   for (let col = 0; col < n; col++) {
     let pivot = col;
     for (let r = col + 1; r < n; r++) if (Math.abs(m[r]![col]!) > Math.abs(m[pivot]![col]!)) pivot = r;
-    const tmp = m[col]!; m[col] = m[pivot]!; m[pivot] = tmp;
+    const tmp = m[col]!;
+    m[col] = m[pivot]!;
+    m[pivot] = tmp;
     const d = Math.abs(m[col]![col]!) < 1e-12 ? 1e-12 : m[col]![col]!;
     for (let r = col + 1; r < n; r++) {
       const f = m[r]![col]! / d;
@@ -323,7 +322,6 @@ function ridgeFit(points: readonly BearerPoint[], asOf: string): number[] {
   return solveLinear(ata, atb);
 }
 
-/** A held-out error as a symmetric multiple: how far off a prediction lands, at worst direction. */
 function symmetricRatio(actual: number, predicted: number): number {
   const a = Math.max(actual, 1e-9);
   const pr = Math.max(predicted, 1e-9);
@@ -334,7 +332,6 @@ function median(values: number[]): number {
   return quantileSorted([...values].sort((a, b) => a - b), 0.5);
 }
 
-/** Leave-one-out: drop each token-bearing protocol, fit on the rest, predict the one held back. */
 export function leaveOneOutFactor(points: readonly BearerPoint[], asOf: string): number {
   if (points.length < 8) return 1;
   const ratios: number[] = [];
@@ -347,7 +344,6 @@ export function leaveOneOutFactor(points: readonly BearerPoint[], asOf: string):
   return Math.round(median(ratios) * 100) / 100;
 }
 
-/** Walk-forward: fit only on the protocols listed earlier, test on the later ones, two folds. */
 export function walkForwardFactor(points: readonly BearerPoint[], asOf: string): number {
   if (points.length < 8) return 1;
   const ordered = [...points].sort((a, b) => ((a.p.listed_at ?? '9999') < (b.p.listed_at ?? '9999') ? -1 : 1));
@@ -376,10 +372,6 @@ export interface FitStats {
   odds_by_category: Record<string, number>;
 }
 
-/**
- * Token odds from the peers' record: the share of a category's protocols that do trade a token,
- * Laplace-smoothed and shrunk to the global share; a launch's odds fall as a protocol ages.
- */
 function tokenOdds(snapshot: Snapshot): { global: number; byCategory: Record<string, number> } {
   const launched = new Map<string, number>();
   const total = new Map<string, number>();
@@ -404,13 +396,11 @@ function tokenOdds(snapshot: Snapshot): { global: number; byCategory: Record<str
   return { global: Math.round(global * 1e4) / 1e4, byCategory };
 }
 
-/** Launch odds fall with age: a protocol that has run years with no token launches less often. */
 function oddsAgeFactor(asOf: string, listedAt: string | null): number {
   const years = yearsSinceListed(asOf, listedAt);
   return 1 / (1 + (years ?? 2) / 4);
 }
 
-/** The farm verdict: expected value, all-in cost and hours, priced in dollars per hour. */
 export function farmVerdict(p: SnapshotProtocol, implied: number, odds: number, age: number | null): { cost_usd: number; hours: number; expected_usd: number; usd_per_hour: number } {
   const capital = capitalFor(p);
   const gas = gasFor(p, capital);
@@ -418,7 +408,7 @@ export function farmVerdict(p: SnapshotProtocol, implied: number, odds: number, 
   const weeks = hold / 7;
   const cost = capital + gas + 2 * weeks;
   const hours = 0.5 + weeks * (10 / 60) + 0.17;
-  const expected = implied * 0.01; // a farming share of the implied launch value: the entry's own claim
+  const expected = implied * 0.01;
   const net = Math.max(0, expected * odds - cost);
   return {
     cost_usd: Math.round(cost),
@@ -469,18 +459,18 @@ interface Score {
   age: number | null;
 }
 
-function scoreProtocol(p: SnapshotProtocol, snapshot: Snapshot, model: ModelConstants, fit: Fit, odds: { global: number; byCategory: Record<string, number> }): Score {
+function scoreProtocol(p: SnapshotProtocol, snapshot: Snapshot, config: ModelConfig, fit: Fit, odds: { global: number; byCategory: Record<string, number> }): Score {
   const ps = { p25: fit.stats.residual_q25, p50: fit.stats.residual_q50, p75: fit.stats.residual_q75 };
   const x = featureVector(p, snapshot.as_of);
   const logMultiple = dot(x, fit.weights);
-  const weight = chainWeight(p.chains, model);
-  const mom = momentum(p.change_7d, model);
-  const ageMult = ageMultiplier(snapshot.as_of, p.listed_at, model);
+  const weight = chainWeight(p.chains, config);
+  const mom = momentum(p.change_7d, config);
+  const ageMult = ageMultiplier(snapshot.as_of, p.listed_at, config);
   const age = ageDays(snapshot.as_of, p.listed_at);
   const categoryOdds = odds.byCategory[categoryKey(p.category)] ?? odds.global;
   const oddsValue = Math.max(0.02, Math.min(0.95, categoryOdds * oddsAgeFactor(snapshot.as_of, p.listed_at)));
-  const lower = Math.max(model.clamp_min_usd, Math.round(p.tvl_usd * model.clamp_tvl_share));
-  const clamp = (raw: number): number => Math.min(model.clamp_max_usd, Math.max(lower, Math.round(raw)));
+  const lower = Math.max(config.clamp_min_usd, Math.round(p.tvl_usd * config.clamp_tvl_share));
+  const clamp = (raw: number): number => Math.min(config.clamp_max_usd, Math.max(lower, Math.round(raw)));
   const implied = clamp(p.tvl_usd * Math.exp(logMultiple) * oddsValue);
   const lowRaw = clamp(implied * Math.exp(ps.p25 - ps.p50));
   const highRaw = clamp(implied * Math.exp(ps.p75 - ps.p50));
@@ -500,12 +490,12 @@ function scoreProtocol(p: SnapshotProtocol, snapshot: Snapshot, model: ModelCons
 }
 
 function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
-  return new Map(protocols.map((p) => [p.slug, p]));
+  return new Map(protocols.map(p => [p.slug, p]));
 }
 
 const slugOrder = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fit: Fit = fitMultipleModel(snapshot)): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, config: ModelConfig = MODEL, fit: Fit = fitMultipleModel(snapshot)): BoardRow[] {
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   const watchlist = new Set(snapshot.watchlist);
@@ -514,12 +504,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
     if (p !== undefined) chosen.set(slug, p);
   }
   const early = snapshot.protocols.filter(
-    (p) => !chosen.has(p.slug) && isPreToken(p) && p.tvl_usd < snapshot.floor_usd,
+    p => !chosen.has(p.slug) && isPreToken(p) && p.tvl_usd < snapshot.floor_usd,
   );
   for (const p of early) chosen.set(p.slug, p);
 
   const odds = { global: fit.stats.global_odds, byCategory: fit.stats.odds_by_category };
-  const scored = [...chosen.values()].map((p) => ({ protocol: p, score: scoreProtocol(p, snapshot, model, fit, odds) }));
+  const scored = [...chosen.values()].map(p => ({ protocol: p, score: scoreProtocol(p, snapshot, config, fit, odds) }));
   scored.sort(
     (a, b) =>
       b.score.implied - a.score.implied ||
@@ -587,7 +577,7 @@ function capitalFor(p: SnapshotProtocol): number {
 }
 
 function gasFor(p: SnapshotProtocol, capital: number): number {
-  const distinct = new Set(p.chains.map((c) => c.trim().toLowerCase())).size;
+  const distinct = new Set(p.chains.map(c => c.trim().toLowerCase())).size;
   if (distinct >= 4) return 12;
   if (distinct >= 2) return 8;
   return capital >= 150 ? 8 : 4;
@@ -665,10 +655,10 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
 
 export function liveRows(snapshot: Snapshot): LiveRow[] {
   return snapshot.protocols
-    .filter((p) => !isPreToken(p) && p.category !== 'CEX')
+    .filter(p => !isPreToken(p) && p.category !== 'CEX')
     .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd)
     .slice(0, LIVE_ROWS)
-    .map((p) => ({
+    .map(p => ({
       slug: p.slug,
       name: p.name,
       category: p.category,
@@ -705,15 +695,15 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
-export function buildPeers(board: BoardRow[], snapshot: Snapshot, model: ModelConstants = MODEL): Record<string, Peer[]> {
+export function buildPeers(board: BoardRow[], snapshot: Snapshot, config: ModelConfig = MODEL): Record<string, Peer[]> {
   const bearers = bearerPoints(snapshot).map(({ p, y }) => ({ p, multiple: Math.exp(y) }));
   const peers: Record<string, Peer[]> = {};
   for (const row of board) {
     const candidates = bearers
-      .filter((b) => b.p.category === row.category)
+      .filter(b => b.p.category === row.category)
       .sort((a, b) => Math.abs(a.p.tvl_usd - row.tvl_usd) - Math.abs(b.p.tvl_usd - row.tvl_usd) || slugOrder(a.p.slug, b.p.slug))
-      .slice(0, model.peer_count);
-    peers[row.slug] = candidates.map((b) => ({
+      .slice(0, config.peer_count);
+    peers[row.slug] = candidates.map(b => ({
       slug: b.p.slug,
       name: b.p.name,
       mcap_usd: b.p.mcap_usd as number,
@@ -723,11 +713,11 @@ export function buildPeers(board: BoardRow[], snapshot: Snapshot, model: ModelCo
   return peers;
 }
 
-export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
+export function buildRadar(snapshot: Snapshot, config: ModelConfig = MODEL): { board: BoardRow[]; radar: RadarData } {
   const fit = fitMultipleModel(snapshot);
-  const board = buildBoard(snapshot, model, fit);
+  const board = buildBoard(snapshot, config, fit);
   const live = liveRows(snapshot);
-  const early = board.filter((r) => !r.on_watchlist).length;
+  const early = board.filter(r => !r.on_watchlist).length;
   const { categories, global } = percentileFallback(snapshot);
   const radar: RadarData = {
     as_of: snapshot.as_of,
@@ -740,7 +730,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     rows: board.map(radarRow),
     live,
-    peers: buildPeers(board, snapshot, model),
+    peers: buildPeers(board, snapshot, config),
     model: {
       version: MODEL_VERSION,
       as_of: snapshot.as_of,
@@ -749,14 +739,13 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       fit: fit.stats,
       category_percentiles: categories,
       global_percentiles: global,
-      constants: model,
+      constants: config,
       major_chains: MAJOR_CHAINS,
     },
   };
   return { board, radar };
 }
 
-/** Peer-multiple percentiles kept beside the fitted model for comparison in the page. */
 function percentileFallback(snapshot: Snapshot): { categories: Record<string, Percentiles>; global: Percentiles } {
   const grouped = new Map<string, number[]>();
   const all: number[] = [];
@@ -786,7 +775,7 @@ export function parseSnapshot(text: string): Snapshot {
   if (typeof o.source !== 'string') throw new SnapshotError('snapshot.json has no source');
   if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) throw new SnapshotError('snapshot.json has no floor_usd');
   if (!Array.isArray(o.protocols)) throw new SnapshotError('snapshot.json has no protocols array');
-  if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
+  if (!Array.isArray(o.watchlist) || o.watchlist.some(s => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
   const protocols = o.protocols.map((v, i) => {
     if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`snapshot.json's protocol ${i} is not an object`);
     const p = v as Record<string, unknown>;
@@ -816,10 +805,10 @@ export function parseSnapshot(text: string): Snapshot {
 }
 
 export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
-  const slugs = new Set(board.map((r) => r.slug));
-  const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
+  const slugs = new Set(board.map(r => r.slug));
+  const missing = snapshot.watchlist.filter(s => !slugs.has(s));
   if (missing.length > 0) return `the board misses ${missing.length} watchlist slug${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 5).join(', ')}`;
-  const ranks = board.map((r) => r.rank).sort((a, b) => a - b);
+  const ranks = board.map(r => r.rank).sort((a, b) => a - b);
   for (let i = 0; i < ranks.length; i++) if (ranks[i] !== i + 1) return `rank ${i + 1} is ${ranks[i]}`;
   for (let i = 1; i < board.length; i++) if (board[i]!.implied_value_usd > board[i - 1]!.implied_value_usd) return `row ${i + 1} outranks row ${i} on implied value`;
   if (board.length >= 2 && board[0]!.implied_value_usd === board[board.length - 1]!.implied_value_usd) {

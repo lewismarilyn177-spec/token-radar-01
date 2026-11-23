@@ -3,14 +3,15 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-const BOARD_PATH = resolve('out/board.json');
+const BOARD_FILE = resolve('out/board.json');
+const SNAPSHOT_FILE = resolve('/root/makefun/token-radar-01-kit/input/snapshot.json');
 
 function main(): void {
   let board: any;
   try {
-    board = JSON.parse(readFileSync(BOARD_PATH, 'utf-8'));
+    board = JSON.parse(readFileSync(BOARD_FILE, 'utf-8'));
   } catch (e) {
-    fail(`Cannot read ${BOARD_PATH}: ${e}`);
+    fail(`Cannot read ${BOARD_FILE}: ${e}`);
     return;
   }
   const rows = board.rows;
@@ -22,13 +23,13 @@ function main(): void {
   // Load snapshot to get watchlist
   let snapshot: any;
   try {
-    snapshot = JSON.parse(readFileSync(resolve('/root/makefun/token-radar-01-kit/input/snapshot.json'), 'utf-8'));
+    snapshot = JSON.parse(readFileSync(SNAPSHOT_FILE, 'utf-8'));
   } catch (e) {
     fail(`Cannot read snapshot: ${e}`);
     return;
   }
 
-  // 1. rows >= 100
+  // 1. at least 100 rows
   if (rows.length < 100) {
     fail(`rows >= 100: got ${rows.length}`);
     return;

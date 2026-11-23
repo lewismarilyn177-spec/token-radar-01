@@ -1,20 +1,20 @@
 (function () {
   'use strict';
 
-  var DATA = window.RADAR_DATA || window.RADAR;
-  var rows = DATA && Array.isArray(DATA.rows) ? DATA.rows : [];
-  var meta = DATA && DATA.model ? DATA.model : DATA && DATA.meta ? DATA.meta : {};
-  var M = meta.constants || {};
-  var cats = meta.categoryPercentiles || meta.category_percentiles || {};
-  var globalP = meta.globalPercentiles || meta.global_percentiles || { p25: 0, p50: 1, p75: 1 };
-  var majorChains = meta.majorChains || meta.major_chains || ['Ethereum', 'Solana', 'Base', 'Arbitrum', 'BSC', 'Optimism', 'Polygon'];
-  var asOf = DATA && DATA.as_of ? DATA.as_of : meta.as_of || 'unknown';
-  var floorUsd = DATA && DATA.floor_usd != null ? DATA.floor_usd : meta.floor_usd != null ? meta.floor_usd : 0;
-  var sourceText = DATA && DATA.source ? DATA.source : meta.source || 'snapshot';
-  var modelVersion = DATA && DATA.model_version ? DATA.model_version : meta.version || meta.model_version || 'radar-3-fitted';
-  var DAY_MS = 86400000;
+  const DATA = window.RADAR_DATA || window.RADAR;
+  const rows = DATA && Array.isArray(DATA.rows) ? DATA.rows : [];
+  const meta = DATA && DATA.model ? DATA.model : DATA && DATA.meta ? DATA.meta : {};
+  const M = meta.constants || {};
+  const cats = meta.categoryPercentiles || meta.category_percentiles || {};
+  const globalP = meta.globalPercentiles || meta.global_percentiles || { p25: 0, p50: 1, p75: 1 };
+  const majorChains = meta.majorChains || meta.major_chains || ['Ethereum', 'Solana', 'Base', 'Arbitrum', 'BSC', 'Optimism', 'Polygon'];
+  const asOf = DATA && DATA.as_of ? DATA.as_of : meta.as_of || 'unknown';
+  const floorUsd = DATA && DATA.floor_usd != null ? DATA.floor_usd : meta.floor_usd != null ? meta.floor_usd : 0;
+  const sourceText = DATA && DATA.source ? DATA.source : meta.source || 'snapshot';
+  const modelVersion = DATA && DATA.model_version ? DATA.model_version : meta.version || meta.model_version || 'radar-3-fitted';
+  const DAY_MS = 86400000;
 
-  var el = {
+  const el = {
     q: document.getElementById('q'),
     integrityChips: document.getElementById('integrityChips'),
     category: document.getElementById('category'),
@@ -40,7 +40,7 @@
     backdrop: document.getElementById('backdrop')
   };
 
-  var state = {
+  const state = {
     q: '',
     category: 'all',
     chain: 'all',
@@ -51,14 +51,14 @@
     selected: null
   };
 
-  var DEFAULT_DIR = { rank: 1, implied: -1, tvl: -1, change: -1, age: 1, name: 1, odds: -1, verdict: -1 };
-  var SORT_LABEL = { rank: 'rank', implied: 'implied value', tvl: 'TVL', change: 'seven-day change', age: 'age', name: 'name', odds: 'token odds', verdict: 'farm verdict' };
-  var fit = meta.fit || null;
+  const DEFAULT_DIR = { rank: 1, implied: -1, tvl: -1, change: -1, age: 1, name: 1, odds: -1, verdict: -1 };
+  const SORT_LABEL = { rank: 'rank', implied: 'implied value', tvl: 'TVL', change: 'seven-day change', age: 'age', name: 'name', odds: 'token odds', verdict: 'farm verdict' };
+  const fit = meta.fit || null;
 
   function num(value, fallback) {
     return typeof value === 'number' && isFinite(value) ? value : fallback;
   }
-  var K = {
+  const K = {
     momentum_weight: num(M.momentum_weight, 0.5),
     momentum_floor: num(M.momentum_floor, -0.5),
     momentum_cap: num(M.momentum_cap, 2),
@@ -75,7 +75,7 @@
 
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
-      return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;';
+      return c === '&' ? '&' : c === '<' ? '<' : c === '>' ? '>' : c === '"' ? '"' : ''';
     });
   }
   function fmtUsd(n) {
