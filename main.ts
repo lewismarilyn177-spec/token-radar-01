@@ -10,12 +10,11 @@ const __dirname = dirname(__filename);
 function main() {
   const args = process.argv.slice(2);
   const inputIdx = args.indexOf('--input');
-  if (inputIdx === -1) {
-    console.error('Usage: node main.ts --input <snapshot.json>');
-    process.exit(1);
-  }
-  const inputPath = args[inputIdx + 1];
+  const inputPath = inputIdx === -1
+    ? join(process.env.MAKEFUN_INPUT_DIR || '/input', 'snapshot.json')
+    : args[inputIdx + 1];
   const outputDir = process.env.MAKEFUN_OUTPUT_DIR || join(__dirname, 'out');
+  const outLabel = process.env.MAKEFUN_OUTPUT_DIR ? 'output' : 'out';
 
   const snapshot = JSON.parse(readFileSync(inputPath, 'utf-8'));
   const model = new Model(snapshot);
@@ -54,7 +53,7 @@ Scenario ranges from residual quartiles. Farm verdict prices a 3-12 step plan wi
 
   const earlyCount = 210;
   const liveCount = board.live.length;
-  console.log(`token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, 250 rows scored (210 early, ${liveCount} live set aside); wrote out/board.json, out/data.js, out/dashboard (3 files), out/screenshots (3 images) and out/dossier.json`);
+  console.log(`token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, 250 rows scored (210 early, ${liveCount} live set aside); wrote ${outLabel}/board.json, ${outLabel}/data.js, ${outLabel}/dashboard (3 files), ${outLabel}/screenshots (3 images) and ${outLabel}/dossier.json`);
 }
 
 main();
