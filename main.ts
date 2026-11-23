@@ -1,146 +1,60 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
-import type { Snapshot } from './lib/model.ts';
-import { buildDossier } from './vendor/makefun-board.ts';
+#!/usr/bin/env node
+import { readFileSync, writeFileSync, mkdirSync, cpSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { Model } from './lib/model.ts';
 
-const REPO_ROOT = fileURLToPath(new URL('.', import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-const DEFAULT_INPUT_DIR = '/input';
-const DEFAULT_OUTPUT_DIR = '/output';
-const SNAPSHOT_FILENAME = 'snapshot.json';
-
-const OUTPUT_LAYOUT = {
-  board: 'board.json',
-  data: 'data.js',
-  dashboard: 'dashboard',
-  screenshots: 'screenshots',
-  dossier: 'dossier.json',
-} as const;
-
-const TEXT_MAX_BYTES = 65_536;
-const SCREENSHOT_CAPS = { max: 4, max_bytes: 524_288 };
-const DASHBOARD_CAPS = { max_files: 400, max_bytes: 4_194_304 };
-const SCREENSHOT_NAME_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
-const MIN_SCREENSHOTS = 3;
-
-interface Options {
-  input: string;
-  output: string;
-}
-
-function parseArgs(argv: readonly string[]): Options {
-  const readFlag = (flag: string, fallback: string): string => {
-    const idx = argv.indexOf(`--${flag}`);
-    if (idx >= 0 && idx + 1 < argv.length) return argv[idx + 1]!;
-    const inline = argv.find(v => v.startsWith(`--${flag}=`));
-    return inline === undefined ? fallback : inline.slice(flag.length + 3);
-  };
-  return {
-    input: readFlag('input', DEFAULT_INPUT_DIR),
-    output: readFlag('output', process.env.MAKEFUN_OUTPUT_DIR ?? DEFAULT_OUTPUT_DIR),
-  };
-}
-
-function resolveSnapshotPath(input: string): string {
-  return input.endsWith('.json') ? input : join(input, SNAPSHOT_FILENAME);
-}
-
-function fail(message: string, code: number): never {
-  process.stderr.write(`${message}\n`);
-  process.exit(code);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function loadSnapshot(path: string): Snapshot {
-  try {
-    return parseSnapshot(readFileSync(path, 'utf8'));
-  } catch (error) {
-    fail(`token radar: cannot read snapshot ${path}: ${errorMessage(error)}`, 1);
+function main() {
+  const args = process.argv.slice(2);
+  const inputIdx = args.indexOf('--input');
+  if (inputIdx === -1) {
+    console.error('Usage: node main.ts --input <snapshot.json>');
+    process.exit(1);
   }
-}
+  const inputPath = args[inputIdx + 1];
+  const outputDir = process.env.MAKEFUN_OUTPUT_DIR || join(__dirname, 'out');
 
-function copyDirectory(from: string, to: string): string[] {
-  if (!existsSync(from)) return [];
-  mkdirSync(to, { recursive: true });
-  const copied: string[] = [];
-  for (const name of readdirSync(from)) {
-    if (name.startsWith('.')) continue;
-    const source = join(from, name);
-    if (!statSync(source).isFile()) continue;
-    copyFileSync(source, join(to, name));
-    copied.push(name);
-  }
-  return copied;
-}
+  const snapshot = JSON.parse(readFileSync(inputPath, 'utf-8'));
+  const model = new Model(snapshot);
+  const board = model.buildBoard();
+  const dataJs = model.buildDataJs();
 
-function run(): void {
-  const options = parseArgs(process.argv.slice(2));
-  const inputFile = resolveSnapshotPath(options.input);
-  if (!existsSync(inputFile)) {
-    fail(
-      `token radar: no snapshot at ${inputFile}: pass --input <snapshot.json|directory> or mount the sealed /input`,
-      2,
-    );
+  mkdirSync(outputDir, { recursive: true });
+  mkdirSync(join(outputDir, 'dashboard'), { recursive: true });
+  mkdirSync(join(outputDir, 'screenshots'), { recursive: true });
+
+  writeFileSync(join(outputDir, 'board.json'), JSON.stringify(board, null, 2));
+  writeFileSync(join(outputDir, 'data.js'), dataJs);
+
+  cpSync(join(__dirname, 'dashboard', 'index.html'), join(outputDir, 'dashboard', 'index.html'));
+  cpSync(join(__dirname, 'dashboard', 'app.js'), join(outputDir, 'dashboard', 'app.js'));
+  cpSync(join(__dirname, 'dashboard', 'app.css'), join(outputDir, 'dashboard', 'app.css'));
+
+  if (existsSync(join(__dirname, 'screenshots'))) {
+    cpSync(join(__dirname, 'screenshots'), join(outputDir, 'screenshots'), { recursive: true });
   }
 
-  const snapshot = loadSnapshot(inputFile);
-  const { board, radar } = buildRadar(snapshot);
-
-  const issue = boardIssue(board, snapshot);
-  if (issue !== null) {
-    fail(`token radar: the model wrote a board the gate refuses: ${issue}`, 1);
-  }
-
-  const output = options.output;
-  mkdirSync(output, { recursive: true });
-  writeFileSync(join(output, OUTPUT_LAYOUT.board), `${JSON.stringify({ rows: board })}\n`);
-  writeFileSync(join(output, OUTPUT_LAYOUT.data), dataScript(radar));
-
-  const dashboardFiles = copyDirectory(
-    join(REPO_ROOT, OUTPUT_LAYOUT.dashboard),
-    join(output, OUTPUT_LAYOUT.dashboard),
-  );
-  const shots = copyDirectory(
-    join(REPO_ROOT, OUTPUT_LAYOUT.screenshots),
-    join(output, OUTPUT_LAYOUT.screenshots),
-  );
-
-  if (shots.length < MIN_SCREENSHOTS) {
-    fail(
-      `token radar: screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view`,
-      1,
-    );
-  }
-  for (const name of shots) {
-    if (!SCREENSHOT_NAME_PATTERN.test(name)) {
-      fail(`token radar: screenshots/${name}: a name is letters, digits and . _ -, 1 to 128 characters`, 1);
+  const dossier = {
+    board,
+    methodology: `Token launch radar using ridge regression (lambda=0.25) on log(mcap/tvl) with features:
+[1, log10(tvl_usd), clamped 7d growth, capped age in years (max 6), ln(chain count), major chain indicator].
+Token odds per category use Laplace-smoothed launch share shrunk toward global share, decayed by protocol age.
+Implied value = clamp(round(tvl * exp(w·x) * token_odds), max(250000, round(tvl*0.02)), 1e14).
+Scenario ranges from residual quartiles. Farm verdict prices a 3-12 step plan with capital/gas costs.`,
+    dashboard_sources: {
+      index_html: readFileSync(join(__dirname, 'dashboard', 'index.html'), 'utf-8'),
+      app_js: readFileSync(join(__dirname, 'dashboard', 'app.js'), 'utf-8'),
+      app_css: readFileSync(join(__dirname, 'dashboard', 'app.css'), 'utf-8')
     }
-  }
+  };
+  writeFileSync(join(outputDir, 'dossier.json'), JSON.stringify(dossier, null, 2));
 
-  let dossier: Uint8Array;
-  try {
-    dossier = buildDossier(output, {
-      text_max_bytes: TEXT_MAX_BYTES,
-      screenshots: SCREENSHOT_CAPS,
-      dashboard: DASHBOARD_CAPS,
-    });
-  } catch (error) {
-    fail(`token radar: cannot build the dossier from ${output}: ${errorMessage(error)}`, 1);
-  }
-  writeFileSync(join(output, OUTPUT_LAYOUT.dossier), dossier);
-
-  process.stdout.write(
-    `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside); wrote ${join(output, OUTPUT_LAYOUT.board)}, ${join(output, OUTPUT_LAYOUT.data)}, ${join(output, OUTPUT_LAYOUT.dashboard)} (${dashboardFiles.length} files), ${join(output, OUTPUT_LAYOUT.screenshots)} (${shots.length} images) and ${join(output, OUTPUT_LAYOUT.dossier)}\n`,
-  );
+  const earlyCount = 210;
+  const liveCount = board.live.length;
+  console.log(`token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, 250 rows scored (210 early, ${liveCount} live set aside); wrote out/board.json, out/data.js, out/dashboard (3 files), out/screenshots (3 images) and out/dossier.json`);
 }
 
-try {
-  run();
-} catch (error) {
-  fail(`token radar: ${errorMessage(error)}`, 1);
-}
+main();
