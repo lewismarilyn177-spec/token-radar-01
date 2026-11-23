@@ -1,5 +1,11 @@
 # token-radar-01
 
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/lewismarilyn177-spec/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/lewismarilyn177-spec/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
+Entry for the [token-radar-01 bounty on make.fun](https://make.fun/bounty/token-radar-01).
+
 A token launch radar: it reads a sealed DefiLlama protocol snapshot, finds every protocol that still records no token (the house watchlist of 40 large pre-token protocols plus 210 smaller ones below the floor), and ranks them by an implied launch value derived from a fitted model.
 
 ## The fitted model (radar-3-fitted)
